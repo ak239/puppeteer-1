@@ -70,46 +70,8 @@ module.exports.addTests = function({testRunner, expect, PROJECT_ROOT, defaultBro
         await browser.close();
       });
     });
+
     describe('Puppeteer.launch', function() {
-      it('should support ignoreHTTPSErrors option', async({httpsServer}) => {
-        const options = Object.assign({ignoreHTTPSErrors: true}, defaultBrowserOptions);
-        const browser = await puppeteer.launch(options);
-        const page = await browser.newPage();
-        let error = null;
-        const response = await page.goto(httpsServer.EMPTY_PAGE).catch(e => error = e);
-        expect(error).toBe(null);
-        expect(response.ok()).toBe(true);
-        expect(response.securityDetails()).toBeTruthy();
-        expect(response.securityDetails().protocol()).toBe('TLS 1.2');
-        await page.close();
-        await browser.close();
-      });
-      it('Network redirects should report SecurityDetails', async({httpsServer}) => {
-        const options = Object.assign({ignoreHTTPSErrors: true}, defaultBrowserOptions);
-        const browser = await puppeteer.launch(options);
-        const page = await browser.newPage();
-        httpsServer.setRedirect('/plzredirect', '/empty.html');
-        const responses =  [];
-        page.on('response', response => responses.push(response));
-        await page.goto(httpsServer.PREFIX + '/plzredirect');
-        expect(responses.length).toBe(2);
-        expect(responses[0].status()).toBe(302);
-        const securityDetails = responses[0].securityDetails();
-        expect(securityDetails.protocol()).toBe('TLS 1.2');
-        await page.close();
-        await browser.close();
-      });
-      it('should work with mixed content', async({server, httpsServer}) => {
-        httpsServer.setRoute('/mixedcontent.html', (req, res) => {
-          res.end(`<iframe src=${server.EMPTY_PAGE}></iframe>`);
-        });
-        const options = Object.assign({ignoreHTTPSErrors: true}, defaultBrowserOptions);
-        const browser = await puppeteer.launch(options);
-        const page = await browser.newPage();
-        await page.goto(httpsServer.PREFIX + '/mixedcontent.html', {waitUntil: 'load'});
-        await page.close();
-        await browser.close();
-      });
       it('should reject all promises when browser is closed', async() => {
         const browser = await puppeteer.launch(defaultBrowserOptions);
         const page = await browser.newPage();
@@ -178,26 +140,6 @@ module.exports.addTests = function({testRunner, expect, PROJECT_ROOT, defaultBro
         await browser2.close();
         rm(userDataDir);
       });
-      xit('headless should be able to read cookies written by headful', async({server}) => {
-        const userDataDir = await mkdtempAsync(TMP_FOLDER);
-        const options = Object.assign({userDataDir}, defaultBrowserOptions);
-        // Write a cookie in headful chrome
-        options.headless = false;
-        const headfulBrowser = await puppeteer.launch(options);
-        const headfulPage = await headfulBrowser.newPage();
-        await headfulPage.goto(server.EMPTY_PAGE);
-        await headfulPage.evaluate(() => document.cookie = 'foo=true; expires=Fri, 31 Dec 9999 23:59:59 GMT');
-        await headfulBrowser.close();
-        // Read the cookie from headless chrome
-        options.headless = true;
-        const headlessBrowser = await puppeteer.launch(options);
-        const headlessPage = await headlessBrowser.newPage();
-        await headlessPage.goto(server.EMPTY_PAGE);
-        const cookie = await headlessPage.evaluate(() => document.cookie);
-        await headlessBrowser.close();
-        rm(userDataDir);
-        expect(cookie).toBe('foo=true');
-      });
       it('should return the default chrome arguments', async() => {
         const args = puppeteer.defaultArgs();
         expect(args).toContain('--no-first-run');
@@ -238,6 +180,7 @@ module.exports.addTests = function({testRunner, expect, PROJECT_ROOT, defaultBro
       it('should support the pipe option', async() => {
         const options = Object.assign({pipe: true}, defaultBrowserOptions);
         const browser = await puppeteer.launch(options);
+        expect((await browser.pages()).length).toBe(1);
         expect(browser.wsEndpoint()).toBe('');
         const page = await browser.newPage();
         expect(await page.evaluate('11 * 11')).toBe(121);
@@ -270,20 +213,16 @@ module.exports.addTests = function({testRunner, expect, PROJECT_ROOT, defaultBro
         expect(pages).toEqual(['about:blank']);
         await browser.close();
       });
-      it('should have default url when launching browser with headless:false', async function() {
-        const options = Object.assign({}, defaultBrowserOptions, {headless: false});
-        const browser = await puppeteer.launch(options);
-        const pages = (await browser.pages()).map(page => page.url());
-        expect(pages).toEqual(['about:blank']);
-        await browser.close();
-      });
       it('should have custom url when launching browser', async function({server}) {
         const customUrl = server.PREFIX + '/empty.html';
         const options = Object.assign({}, defaultBrowserOptions);
         options.args = [customUrl].concat(options.args);
         const browser = await puppeteer.launch(options);
-        const pages = (await browser.pages()).map(page => page.url());
-        expect(pages).toEqual([customUrl]);
+        const pages = await browser.pages();
+        expect(pages.length).toBe(1);
+        if (pages[0].url() !== customUrl)
+          await pages[0].waitForNavigation();
+        expect(pages[0].url()).toBe(customUrl);
         await browser.close();
       });
     });
@@ -300,6 +239,21 @@ module.exports.addTests = function({testRunner, expect, PROJECT_ROOT, defaultBro
         const secondPage = await originalBrowser.newPage();
         expect(await secondPage.evaluate(() => 7 * 6)).toBe(42, 'original browser should still work');
         await originalBrowser.close();
+      });
+      it('should support ignoreHTTPSErrors option', async({httpsServer}) => {
+        const originalBrowser = await puppeteer.launch(defaultBrowserOptions);
+        const browserWSEndpoint = originalBrowser.wsEndpoint();
+
+        const browser = await puppeteer.connect({browserWSEndpoint, ignoreHTTPSErrors: true});
+        const page = await browser.newPage();
+        let error = null;
+        const response = await page.goto(httpsServer.EMPTY_PAGE).catch(e => error = e);
+        expect(error).toBe(null);
+        expect(response.ok()).toBe(true);
+        expect(response.securityDetails()).toBeTruthy();
+        expect(response.securityDetails().protocol()).toBe('TLS 1.2');
+        await page.close();
+        await browser.close();
       });
       it('should be able to reconnect to a disconnected browser', async({server}) => {
         const originalBrowser = await puppeteer.launch(defaultBrowserOptions);
